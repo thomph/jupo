@@ -1,5 +1,5 @@
-Install `jupo` on server [Ubuntu 12.04](http://releases.ubuntu.com/)
-
+Install `jupo` on server [Ubuntu 12.04](http://releases.ubuntu.com/)  
+test
 ### Preparations  
 You will need to make sure that your username is on the sudo authorized list located at '/etc/sudoers'  
 ```
