@@ -663,6 +663,11 @@ img.micro-avatar {
   word-wrap: break-word;
   z-index: 2;
   position: fixed;
+  
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
 
 #welcome-box {
@@ -1846,6 +1851,11 @@ form input#add-members {
 
 div#right-sidebar div.header {
   padding: 7px 10px 5px 8px;
+  
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
   /*  border-top: 1px solid rgba(229, 229, 229, 0.75);*/
 }
 
@@ -2437,6 +2447,7 @@ form.new a.select-contacts i {
 
 form.new a.select-contacts {
   opacity: .8;
+  padding: 1px 5px 1px 10px;
 }
 
 form.new a.select-contacts:hover {
@@ -2920,6 +2931,7 @@ div#body section div.attachment, div#overlay section div.attachment {/*   margin
 }
 
 div#body div.file-attachment, div#overlay div.file-attachment {
+  text-align: center;
   /*  margin: 8px 0 2px;*/
   width: 100%;
   /*   text-overflow: ellipsis; */
@@ -3008,9 +3020,11 @@ div.file-attachment > div.title {
 }
 
 div.file-attachment a[rel='gallery'] img {
-  display: block;
+  /* display: block; */
+  display: inline-block;
   max-width: 500px;
   width: auto;
+  max-height: 600px;
 }
 
 ul.comments div.file-attachment a[rel='gallery'] img {
@@ -3020,9 +3034,9 @@ ul.comments div.file-attachment a[rel='gallery'] img {
 div.file-attachment a[rel='gallery'] {
   display: block;
   position: relative;
-  float: left;
+  /* float: left; */
   margin: 4px 6px 3px 0;
-  max-height: 200px;
+  /* max-height: 200px; */
   overflow: hidden;
 }
 
@@ -3032,9 +3046,6 @@ div.file-attachment a[rel='gallery']::before {
   position: absolute;
   width: 100%;
   height: 100%;
-  -moz-box-shadow: inset 0 0 5px 0px #e2e2e2;
-  -webkit-box-shadow: inset 0 0 5px 0px #e2e2e2;
-  box-shadow: inset 0 0 5px 0px #e2e2e2;
 }
 
 div.url-attachment {
@@ -6437,6 +6448,11 @@ article .file-attachment .title.image-name a {
   -webkit-box-shadow: 0 4px 12px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .5), 0 0 250px rgba(255, 255, 255, .1);
   -moz-box-shadow: 0 4px 12px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.5), 0 0 250px rgba(255, 255, 255, .1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .5), 0 0 250px rgba(255, 255, 255, .1);
+  
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
 
 #popup .content #page-header {
@@ -6477,10 +6493,18 @@ article .file-attachment .title.image-name a {
 }
 
 #popup .content #page-header h2 a {
-  font-size: 16px;
-  font-weight: bold;
-  font-family: arial;
-  color: #37404e;
+  font-size: 12px;
+  padding: 0 2px;
+  color: rgba(137, 145, 156, 0.9);
+}
+
+#popup .content #page-header h2 a:first-child {
+  padding: 0 2px 0 0;
+}
+
+#popup .content #page-header h2 a.active {
+  color: #333;
+  font-size: 14px;
 }
 
 #popup .content #page-header .info {
@@ -6962,7 +6986,7 @@ header nav a.view-notifications span.counter {
 
 #settings input[type='submit'] {
 padding: 8px 0;
-margin-left: 140px;
+margin-left: 100px;
 margin-top: -10px;
 float: left;
 font-size: 12px;
@@ -7020,20 +7044,22 @@ width: 260px;
 }
 
 #body.post {
-  margin-top: 50px;
+  margin: 50px 0;
   width: 534px;
   border: none;
   padding: 0;
   box-shadow: none;
   position: absolute;
   padding-bottom: 50px;
-  min-height: auto;
+  left: 50%;
+  margin-left: -325px;
 }
 
 #body.post > div.float {
   position: fixed;
-  left: 750px;
+  left: 50%;
   top: 60px;
+  margin-left: 250px;
 }
 
 #body.post li.feed {
@@ -7049,8 +7075,8 @@ width: 260px;
 
 #popup #page-header.search h2 {
   position: absolute;
-left: 22px;
-line-height: 25px;
+  left: 20px;
+  line-height: 25px;
 }
 
 #popup #page-header.search form {
@@ -7100,7 +7126,9 @@ top: 8px;
   padding: 0 10px 0 20px;
 }
 
-#popup .people span.email {
+#popup .people span.email, 
+#popup .people span.info,
+#popup .people span.info a {
   color: rgba(137,145,156,0.9);
   font-size: 11px;
   float: left;
@@ -7332,11 +7360,14 @@ ul.groups div.title div.actions {
 
 form.invite {
   padding: 20px 25px;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 }
 
 form.invite label {
   float: left;
-  color: #666;
 }
 
 form.invite textarea {
@@ -7346,6 +7377,41 @@ form.invite textarea {
   resize: none;
 }
 
+form.invite ul.emails {
+  margin-top: 3px;
+  margin-bottom: 12px;
+  height: 100px;
+  overflow-y: auto;
+  border: 1px solid rgba(196,205,224,0.6);
+  box-shadow: inset 0 1px 3px -1px #ddd;
+}
+
+form.invite label.toggle-check-all {
+  color: #333;
+  margin: 0;
+  float: none;
+  padding: 5px 0 0 6px;
+  display: inline-block;
+  width: 100%;
+}
+
+form.invite label.toggle-check-all span {
+  margin-right: 5px;
+}
+
+
+form.invite ul.emails label {
+  color: #333;
+  display: block;
+  padding: 2px 5px;
+  float: none;
+}
+
+form.invite ul.emails input[type='checkbox'] {
+  float: left;
+  margin-top: 3px;
+  margin-right: 6px;
+}
 /*
 form.invite ul.token-input-list {
   width: 478px;
@@ -7905,15 +7971,38 @@ div.chatbox div.header .arrow-top-border {
   left: 125px;
 }
 
-.line-separator{
-  height:1px;
-  border-bottom:1px dotted #313030;
-}
-
-
-
 .picker.modal-dialog-bg {
   z-index: 10;
 }
 
 
+
+#popup li.select {
+  z-index: 0;
+  padding: 15px 20px 13px 40px;
+  position: relative;
+}
+
+#popup li.select label {
+  padding-top: 22px;
+  padding-left: 20px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  margin-left: 0;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+#popup li.select label:active {
+  background: #fafafa;
+}
+
+body.popup-open {
+  overflow: hidden;
+}

@@ -13,8 +13,11 @@ import api
 import filters
 import settings
 
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFont
 
-
+import StringIO
 
 class Model:
   def __init__(self, info, db_name=None):
@@ -292,14 +295,15 @@ class User(Model):
   @property
   def avatar(self):
     avatar = self.info.get('avatar')
-    
+
+    # normal routine, if user already has an avatar (Google profile or uploaded photo)
     if avatar and isinstance(avatar, str) or isinstance(avatar, unicode):
       if 'googleusercontent' in avatar:
         avatar = avatar.replace('/photo.jpg', '/s60-c/photo.jpg')
       return avatar
     elif avatar:
       attachment = api.get_attachment_info(avatar, db_name=self.db_name)
-      attachment_size = attachment.size
+      attachment_size = attachment.size      
 
       # even if user chose no file to upload, currently there is still a record for that in attachment with size = 0 bytes
       if attachment_size != '0 bytes':
@@ -309,15 +313,74 @@ class User(Model):
         
         return '/img/' + str(avatar) + '.jpg'
     
-    # robohash
+    # fallback avatar
+    avatar_renderer = settings.AVATAR_RENDERER
+    avatar_url = ""
+
     default = "http://jupo.s3.amazonaws.com/images/user2.png"
-    if not self.email:
-      return default
     
-    email = self.email.strip().lower()
-    width = height = 50
-    robohash_url = 'http://robohash.org/%s.png?set=set1&size=%sx%s&gravatar=yes' % (email, width, height)
-    return robohash_url
+    if avatar_renderer == 'robohash':
+      # robohash
+      if not self.email:
+        return default
+      
+      email = self.email.strip().lower()
+      width = height = 50
+      avatar_url = 'http://robohash.org/%s.png?set=set1&size=%sx%s&gravatar=yes'\
+                   % (email, width, height)
+    elif avatar_renderer == 'initials':
+      # render avatar, using initials from first and last word
+      # initials = ''.join([c[0].upper() for c in self.name.split(' ')])
+      name = self.name if self.name else self.email
+      if not name:
+        return default
+        
+      initials_array = name.split()
+      
+      first_initial = initials_array[0][0].upper()
+      
+      initials = first_initial
+
+      if len(initials_array) > 1:
+        last_initial = initials_array[-1][0].upper()
+        
+        initials = initials + "" + last_initial
+
+      font_size = 100
+      
+      font_path = path.join(path.dirname(path.abspath(__file__)),
+                            "public/styles/HelveticaNeueLight.ttf")
+      font = ImageFont.truetype(font_path, font_size)
+      
+      # big canvas with big font size --> still being crisp when
+      # resize later (hopefully)
+      W, H = (230, 230)
+      blank_canvas = Image.new("RGBA", (W, H), (255,255,255))
+      draw = ImageDraw.Draw(blank_canvas)
+
+      # w, h = draw.textsize(initials)
+      w, h = font.getsize(initials)
+      draw.text(((W-w)/2,(H-h)/2), initials, (226, 111, 38), font=font)
+
+      # create a large canvas then scale down to render the text beautifully
+      # blank_canvas = blank_canvas.resize((30, 30), Image.ANTIALIAS)
+
+      # save as attachment
+      session_id = api.get_session_id(user_id=self.id)
+
+      out = StringIO.StringIO()
+      blank_canvas.save(out, "PNG")
+
+      fid = api.new_attachment(session_id, "avatar.png", out.getvalue())
+      
+      out.close()
+
+      avatar_url = '/img/' + str(fid) + '.png'
+
+      # update avatar field for that user, this should run once only
+      api.update_user_avatar(self.email, fid)
+
+    return avatar_url
   
   @property
   def introduction(self):
@@ -462,7 +525,6 @@ class User(Model):
   
   @property
   def google_contacts(self):
-    # return [User({'_id': api.get_user_id_from_email_address(email, db_name=self.db_name), 'email': email}) for email in self.info.get('google_contacts', [])]
     return self.info.get('google_contacts')
 
   @property

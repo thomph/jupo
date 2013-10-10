@@ -144,11 +144,39 @@ def send_mail(to_addresses, subject=None, body=None, mail_type=None,
     body = template.render()
     
   elif mail_type == 'invite':
-    if kwargs.get('group_name'):
-      subject = "%s has invited you to %s" % (kwargs.get('username'), 
-                                              kwargs.get('group_name'))
+    refs = list(set(kwargs.get('list_ref', [])))
+    ref_count = len(refs)
+    if ref_count >= 2:
+      text = kwargs.get('username')
+      if ref_count == 2:
+        text += ' and %s' % get_user_info([i for i in refs \
+                                           if i != kwargs.get('user_id')][-1],
+                                          db_name=db_name).name
+      elif ref_count == 3:
+        text += ', %s and 1 other' % \
+          (get_user_info([i for i in refs \
+                          if i != kwargs.get('user_id')][-1],
+                         db_name=db_name).name)
+      else:
+        text += ', %s and %s others' % \
+          (get_user_info([i for i in refs \
+                          if i != kwargs.get('user_id')][-1],
+                         db_name=db_name).name,
+           ref_count - 2)
+      
+      text += ' have invited you to'
+        
+      if kwargs.get('group_name'):
+        subject = "%s %s" % (text, kwargs.get('group_name'))
+      else:
+        subject = "%s Jupo" % (text)
+
     else:
-      subject = "%s has invited you to Jupo" % (kwargs.get('username'))
+      if kwargs.get('group_name'):
+        subject = "%s has invited you to %s" % (kwargs.get('username'),
+                                                kwargs.get('group_name'))
+      else:
+        subject = "%s has invited you to Jupo" % (kwargs.get('username'))
 
     template = app.CURRENT_APP.jinja_env.get_template('email/invite.html')
     body = template.render(domain=domain, **kwargs)
@@ -254,7 +282,22 @@ def is_snowflake_id(_id):
   else:
     return False
 
-  
+def is_domain_name(host):
+  if not host:
+    return False
+  try:
+    socket.gethostbyname(host)
+    return True
+  except socket.gaierror:
+    return False
+
+def is_custom_domain(domain):
+  if settings.PRIMARY_DOMAIN not in domain:
+    return True
+  elif is_domain_name(domain[:-(len(settings.PRIMARY_DOMAIN) + 1)]):
+    return False
+  else:
+    return True
 
 #===============================================================================
 # Securely hash and check passwords using PBKDF2
@@ -424,14 +467,14 @@ def get_database_name():
   db_name = None
   if request:
     hostname = request.headers.get('Host')
-      
+
     if hostname:
       network = request.cookies.get('network')
+
       if network and not hostname.startswith(network):
         hostname = network + '.' + settings.PRIMARY_DOMAIN
-        
+
       db_name = hostname.split(':')[0].lower().strip().replace('.', '_')
-  
   if not db_name:
     db_name = settings.PRIMARY_DOMAIN.replace('.', '_')
   
@@ -631,7 +674,7 @@ def get_session_id(user_id, db_name=None):
     db_name = get_database_name()
   db = DATABASE[db_name]
   
-  if user_id and user_id != 'public':
+  if str(user_id).isdigit():
     user = db.owner.find_one({"_id": long(user_id)}, {'session_id': True,
                                                       'password': True})
     if not user:
@@ -649,8 +692,14 @@ def get_session_id(user_id, db_name=None):
 def is_exists(email=None, db_name=None):
   if db_name is not None:
     if db_name in get_database_names():
-      return True
-    return False
+      # check further more, if there is no user yet, consider non-exist as well
+      db = DATABASE[db_name]
+      if db.owner.find_one():
+        return True
+      else:
+        return False
+    else:
+      return False
   elif db_name == settings.PRIMARY_DOMAIN.split(':')[0].replace('.', '_'):
     return True
   else:
@@ -839,13 +888,24 @@ def sign_in(email, password, user_agent=None, remote_addr=None):
   email = email.strip().lower()
   user = db.owner.find_one({"email": email}, {'password': True,
                                               'salt': True,
+                                              'link': True,
                                               'session_id': True})
   if not user or not user.get('password'):
     return None
   else:
     session_id = None
     if user.get('password') is True:
-      return False
+      # user logged in via oauth, return specific provider (based on user link)
+      oauth_provider = ""
+
+      if "facebook" in user.get("link"):
+        oauth_provider = 'Facebook'
+        return -1
+      elif "google" in user.get("link"):
+        oauth_provider = 'Google'
+        return -2
+      else:
+        return False
     elif '$' in user.get('password'): # PBKDF2 hashing
       ok = check_hash(password, user['password'])
     else:  # old password hashing (sha512 + salt)
@@ -887,24 +947,40 @@ def invite(session_id, email, group_id=None, msg=None, db_name=None):
   user_id = get_user_id(session_id)
   user = get_user_info(user_id)
   email = email.strip().lower()
-  code = hashlib.md5(email + str(utctime())).hexdigest()
-  info = db.owner.find_one({'email': email}, {'password': True})
+  code = hashlib.md5(email + settings.SECRET_KEY).hexdigest()
+  info = db.owner.find_one({'email': email}, {'password': True, 'ref': True})
   is_new_user = True
+  list_ref = None
   if info:
-    if info.has_key('password'):  # existed account
-      _id = info['_id']
+    _id = info['_id']
+
+    # append user_id to the existing list of ObjectID in info['ref']
+    if not info.get('ref'):
+      list_ref = []
+    else:
+      if isinstance(info['ref'], list):
+        if not user_id in info['ref']:
+          info['ref'].append(user_id)
+        list_ref = info['ref']
+      else:
+        list_ref = [info['ref']]
+    
+    list_ref.append(user_id)
+    list_ref = list(set(list_ref))
+    
+    if info.get('password'):
+      actions = {'$set': {'ref': list_ref}}
       is_new_user = False
     else:
-      _id = info['_id']
-      db.owner.update({'_id': _id},
-                      {'$set': {'ref': user_id,
-                                'session_id': code,
-                                'timestamp': utctime()}})
+      actions = {'$set': {'ref': list_ref, 
+                          'session_id': code}}
+  
+    db.owner.update({'_id': _id}, actions)
   else:
     _id = new_id()
     db.owner.insert({'_id': _id,
                      'email': email,
-                     'ref': user_id,
+                     'ref': [user_id],
                      'timestamp': utctime(),
                      'session_id': code})
     
@@ -914,19 +990,48 @@ def invite(session_id, email, group_id=None, msg=None, db_name=None):
     group = get_group_info(session_id, group_id)
   else:
     group = Group({})
-    
-
-  send_mail_queue.enqueue(send_mail, email, 
-                          mail_type='invite', 
-                          code=code, 
-                          is_new_user=is_new_user,
-                          user_id=user.id,
-                          username=user.name, 
-                          msg=msg,
-                          group_id=group.id, 
-                          group_name=group.name,
-                          db_name=db_name)
   
+  if group_id:
+    status_invitation = db.activity.find_one({'sender': user_id, 
+                                              'receiver': _id, 
+                                              'group': long(group_id)}, {'timestamp': True})
+    
+  else:
+    status_invitation = db.activity.find_one({'sender': user_id, 
+                                              'receiver': _id, 
+                                              'group': {'$exists': False}}, {'timestamp': True})
+  accept_invitation = False
+  
+  if status_invitation and status_invitation.has_key('timestamp'):
+    if utctime() - status_invitation['timestamp'] >= 6*3600:
+      accept_invitation = True
+  else:
+    accept_invitation = True
+    
+  if accept_invitation:
+    send_mail_queue.enqueue(send_mail, email, 
+                            mail_type='invite', 
+                            code=code, 
+                            is_new_user=is_new_user,
+                            user_id=user.id,
+                            username=user.name,
+                            avatar=user.avatar,
+                            msg=msg,
+                            group_id=group.id, 
+                            group_name=group.name,
+                            db_name=db_name)
+    
+    if group_id:
+      db.activity.update({'sender': user_id, 
+                          'receiver': _id, 
+                          'group': long(group_id)},
+                         {'$set': {'timestamp': utctime()}}, upsert=True)
+    else:
+      db.activity.update({'sender': user_id, 
+                          'receiver': _id, 
+                          'group': {'$exists': False}},
+                         {'$set': {'timestamp': utctime()}}, upsert=True)
+    
   db.owner.update({'_id': user_id}, {'$addToSet': {'google_contacts': email}})
     
   return True
@@ -954,12 +1059,16 @@ def complete_profile(code, name, password, gender, avatar):
   
   # Send notification to friends
   user = get_user_info(user_id)
-
-  # add this user to list of contact of referal
-  referer_id = user.ref
-  add_to_contacts(get_session_id(referer_id), user_id)
   
   session_id = info['session_id']
+
+  # add this user to list of contact of referal
+  referer_id_array = user.ref
+  if referer_id_array:
+    for referer_id in referer_id_array:
+      add_to_contacts(get_session_id(referer_id), user_id)
+      add_to_contacts(session_id, referer_id)
+  
   friends = db.owner.find({'google_contacts': user.email})
   for user in friends:
     notification_queue.enqueue(new_notification, 
@@ -999,7 +1108,11 @@ def sign_in_with_google(email, name, gender, avatar,
     if not session_id:
       session_id = hashlib.md5(email + str(utctime())).hexdigest()
       # update avatar here as well, any other stuffs to update ?
-      info = {'session_id': session_id, 'avatar': avatar}
+      if user.get('avatar'):  
+        # do not update avatar if user already had it
+        info = {'session_id': session_id}
+      else:  
+        info = {'session_id': session_id, 'avatar': avatar}
       if not user.get('password'):
         info['password'] = True
       if notify_list:
@@ -1148,7 +1261,8 @@ def sign_up(email, password, name, user_agent=None, remote_addr=None):
   db = DATABASE[db_name]
   
   email = email.strip().lower()
-  name = name.strip()
+  if name:
+    name = name.strip()
   raw_password = password
   
   # Validation
@@ -1565,6 +1679,22 @@ def is_group(_id, db_name=None):
   
   cache.set(key, 0)
   return False
+
+def update_network_info(network_id, info):
+  db_name = get_database_name()
+  db = DATABASE[db_name]
+
+  #user_id = get_user_id(session_id)
+  #if not user_id:
+  #  return False
+
+  if network_id != "0":
+    db.info.update({'_id': ObjectId(network_id)}, {'$set': info})
+    return True
+  else:
+    info['timestamp'] = utctime()
+    db.info.insert(info)
+    return False
 
 def update_user_info(session_id, info):
   db_name = get_database_name()
@@ -2179,9 +2309,7 @@ def get_member_email_addresses(db_name=None):
   # (same table owner, got no email field)
   member_email_addresses = [i['email'] \
                             for i in db.owner.find({'email': {'$ne': None}, 'name' : {'$ne': None}}, 
-                                                   {'email': True})]
-
-  # print "DEBUG - in get_member_email_addresses - member_email_addresses = " + str(member_email_addresses)
+                                                   {'email': True}) if i.get('email').strip()]
 
   return member_email_addresses
 
@@ -2197,8 +2325,10 @@ def get_invited_addresses(db_name=None, user_id=None):
   invited_addresses = [i['email'] \
                        for i in db.owner.find({'email': {'$ne': None}, 
                                                'name': None, 
-                                               'ref': user_id}, 
-                                              {'email': True})]
+                                               # 'ref': re.compile(str(user_id))}, 
+                                               'ref': user_id},
+                                              {'email': True})\
+                       if i.get('email').strip()]
 
   return invited_addresses
 
@@ -2262,6 +2392,21 @@ def all_emails():
   db = DATABASE[db_name]
   
   return db.email.find()
+
+def update_user_avatar(email, avatar=None):
+  if not email:
+    return False
+  
+  db_name = get_database_name()
+  db = DATABASE[db_name]
+  
+  email = email.strip().lower()
+  if avatar:
+    if db.owner.find_one({'email': email}):
+      db.owner.update({'email': email}, {'$set': {'avatar': avatar}})
+  
+  cache.delete('%s:all_users' % db_name)
+  return True
 
 def update_user(email, name=None, owner=None, avatar=None):
   db_name = get_database_name()
@@ -4256,6 +4401,9 @@ def new_attachment(session_id_or_user_id, filename, filedata):
   db = DATABASE[db_name]
   datastore = GridFS(db)
   
+  if not session_id_or_user_id:
+    return False
+  
   if isinstance(session_id_or_user_id, int) \
   or isinstance(session_id_or_user_id, long) \
   or session_id_or_user_id.isdigit():
@@ -5929,10 +6077,16 @@ def get_db_names(email):
 def new_network(db_name, organization_name, description=None):
   if is_exists(db_name=db_name):
     return False
-  
+
+  if description is None:
+    description = "This network is dedicated to your organization.<br/> " \
+                  "Share files, discuss projects, and get work done faster<br/>" \
+                  "Want to try it ? Just sign in :)"
+
   info = {'domain': db_name.replace('_', '.'),
           'name': organization_name,
           'description': description,
+          'auth_google': 'on', # activate Google authentication for new network by default
           'timestamp': utctime()}
   DATABASE[db_name].info.insert(info)
   key = 'db_names'
@@ -5961,19 +6115,39 @@ def get_network_admin_ids(db_name=None):
     return [i['_id'] for i in users]
   return [get_first_user_id(db_name)]
 
+def get_network_by_id(network_id):
+  db_name = get_database_name()
+  db = DATABASE[db_name]
+
+  network = db.info.find_one({'_id': ObjectId(network_id)})
+
+  return network
+
+def get_network_by_hostname(hostname):
+  db_name = get_database_name()
+  db = DATABASE[db_name]
+
+  network = db.info.find_one({'domain': hostname})
+  
+  if network:
+    if 'auth_facebook' not in network:
+      network['auth_facebook'] = True
+    
+    if 'auth_google' not in network:
+      network['auth_google'] = True
+    
+    if 'auth_normal' not in network:
+      network['auth_normal'] = True
+  
+  return network
+
 @line_profile
 def get_network_info(db_name):
-  key = '%s:info' % db_name
-  info = cache.get(key)
-  if info is not None:
-    return info 
-  
   if db_name == settings.PRIMARY_DOMAIN.replace('.', '_'):
     info = {'name': 'Jupo', 'timestamp': 0}
   else:
     info = DATABASE[db_name].info.find_one()
     
-  cache.set(key, info)
   return info
 
 @line_profile
@@ -6019,15 +6193,20 @@ def get_networks(user_id, user_email=None):
     
   out = sorted(networks_list, 
                key=sortkeypicker(['-unread_notifications', 
-                                  'name', '-timestamp']))
+                                  'name']))
+  #out = sorted(networks_list,
+  #             key=sortkeypicker(['-unread_notifications',
+  #                                'name', '-timestamp']))
   cache.set(key, out, namespace=user_id)
   return out
 
 PRIMARY_IP = socket.gethostbyname(settings.PRIMARY_DOMAIN)
 def domain_is_ok(domain_name):
+  if not domain_name:
+    return False
   try:
     return PRIMARY_IP in socket.gethostbyaddr(domain_name)[-1]
-  except socket.gaierror:
+  except (socket.gaierror, socket.herror):
     return False
  
 

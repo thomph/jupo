@@ -36,9 +36,9 @@ $(document).ready(function(e) {
   $.global.history = [];
   sessionStorage.clear();
 
-  if ($('#header-container').length > 0) {
+  try {
     init_avatar_uploader();
-  }  
+  } catch (err) {}
   refresh('#body');
 
 
@@ -113,7 +113,7 @@ $(document).ready(function(e) {
   $(window).scroll(function() {
     if ($('div#overlay').is(':visible') == false && $(window).scrollTop() + $(window).height() > get_doc_height() - 250) {
       console.log('scroll end');
-      if ($.global.loading != true) {
+      if ($.global.loading !== true && $('body').hasClass('popup-open') === false) {
         $('a.next').trigger('click');
       }
     }
@@ -790,7 +790,11 @@ $(document).ready(function(e) {
       }
     });
     
-    element.replaceWith('<a href="#" class="button"> ✔ Sent</a>');
+    if (element.hasClass('button') == true) {
+      element.replaceWith('<a href="#" class="button"> ✔ Sent</a>');
+    } else {
+      element.replaceWith('<a href="#"> ✔ Sent</a>');
+    }
     return false;
   });
 
@@ -842,16 +846,11 @@ $(document).ready(function(e) {
       }
     });
     href = href.replace('/unfollow', '/follow');
-    
-    
-    if (window.location.href.indexOf('/group/') != -1) {
-      element.replaceWith('<a href="' + href + '" class="button follow">Follow</a>');
+
+    if ($(this).parents('#right-sidebar').length > 0) {
+      element.replaceWith('<a href="' + href + '" class="follow">+ Add Contact</a>');
     } else {
-      if ($(this).parents('#right-sidebar').length > 0) {
-        element.replaceWith('<a href="' + href + '" class="follow">+ Add Contact</a>');
-      } else {
-        element.replaceWith('<a href="' + href + '" class="button follow">Add to Contacts</a>');
-      }
+      element.replaceWith('<a href="' + href + '" class="button follow">Add to Contacts</a>');
     }
     return false;
   });
@@ -924,12 +923,17 @@ $(document).ready(function(e) {
   
   $('#popup').on("submit", 'form.invite', function() {
     var _this = $(this);
+    
+    $('input.button', _this).val('Sending...');
     $.ajax({
       type: "POST",
       cache: false,
       url: $(this).attr('action'),
       data: $(this).serializeArray(),
       success: function(group_id) {
+        
+        $('input.button', _this).val('Send Invitation');
+        
         $('textarea[name="msg"]', _this).val('');
         $('input.friends', _this).tokenInput('clear');
         
@@ -937,6 +941,7 @@ $(document).ready(function(e) {
         return false;
       },
       error: function() {
+        $('input.button', _this).val('Send Invitation');
         $('textarea[name="msg"]', _this).val('');
         $('input.friends', _this).tokenInput('clear');
         
@@ -2895,7 +2900,7 @@ $(document).ready(function(e) {
               var group_chat_url = $('#popup .group-chat a').attr('href');
               if (group_chat_url != undefined)
               {
-                $('input.checkbox-chat','#popup').show();
+                $('#popup label.checkbox').show();
                 $('#popup ul.people li input[type="checkbox"]').each(function(index, value) {
                   if (group_chat_url.indexOf($(this).val()) != -1) {
                     $(this).attr('checked', 'checked');

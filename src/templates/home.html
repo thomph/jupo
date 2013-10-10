@@ -113,6 +113,11 @@
             </li>
             {% endif %}
             <li><a href='/user/{{ owner.id }}/update_profile' class='popup'>Account Settings</a></li>
+
+            {% if owner.is_admin() == True %}
+              <li><a href='/network/{% if not network["_id"] %}0{% else %}{{ network["_id"] }}{% endif %}/config' class='popup'>Network Configuration</a></li>
+            {% endif %}
+
             <li>
               <a id='pick-avatar'>Change Profile Picture</a>
               
@@ -336,9 +341,11 @@
       if (top.location.href != self.location.href)
          top.location.href = self.location.href;
          
-      {% if request.args and not request.path.endswith('/new') %}
+      {% if 'getting_started' in request.args %}
         $(document).ready(function() {
-            hopscotch.startTour({{ request.args.keys()[0] }});
+          try {
+            hopscotch.startTour(getting_started);
+          } catch (err) {}
         })
       {% endif %}
   </script>
@@ -403,6 +410,18 @@
         plan_name: 'free'      // To use the example segments, set this to 'free' or 'premium'.
       });
     </script>
+  {% endif %}
+
+  {% if settings.ZOPIM_ENABLE %}
+    <!--Start of Zopim Live Chat Script-->
+    <script type="text/javascript">
+    window.$zopim||(function(d,s){var z=$zopim=function(c){z._.push(c)},$=z.s=
+    d.createElement(s),e=d.getElementsByTagName(s)[0];z.set=function(o){z.set.
+    _.push(o)};z._=[];z.set._=[];$.async=!0;$.setAttribute('charset','utf-8');
+    $.src='//v2.zopim.com/?1Zi7dL55bHweXIFoxJYlMivuVAMmTwoU';z.t=+new Date;$.
+    type='text/javascript';e.parentNode.insertBefore($,e)})(document,'script');
+    </script>
+    <!--End of Zopim Live Chat Script-->
   {% endif %}
   
   

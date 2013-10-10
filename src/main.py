@@ -127,6 +127,7 @@ def render_homepage(session_id, title, **kwargs):
 
   resp = Response(render_template('home.html', 
                                   owner=owner,
+                                  network=network_info,
                                   title=title, 
                                   groups=groups,
                                   friends_online=friends_online,
@@ -556,7 +557,9 @@ def discover(name='discover', page=1):
     if not user_id:
   #    return render_homepage(session_id, 'Get work done. Faster. | Jupo', 
   #                           view='intro')
-      return render_template('landing_page.html', domain=settings.PRIMARY_DOMAIN)
+      return render_template('landing_page.html', 
+                             settings=settings,
+                             domain=settings.PRIMARY_DOMAIN)
     else:
       return render_homepage(session_id, 'Discover', 
                              view='discover',
@@ -579,6 +582,8 @@ def invite():
 
     # not registered but got invitation
     invited_addrs = api.get_invited_addresses(user_id=user_id)
+    
+    google_contacts = owner.google_contacts
 
     email_addrs = []
     if owner.google_contacts is not None:
@@ -596,7 +601,9 @@ def invite():
                   'body': render_template('invite.html', 
                                           title=title,
                                           email_addrs=email_addrs,
+                                          member_addrs=member_addrs,
                                           invited_addrs=invited_addrs,
+                                          google_contacts=google_contacts,
                                           group=group)})
   else:
     email = request.form.get('email', request.args.get('email'))
@@ -604,20 +611,17 @@ def invite():
       api.invite(session_id, email, group_id)
       return ' ✔ Done '
     else:
-      addrs = request.form.get('to')
-      invited_addrs = request.form.get('to_invited')
+      addrs = set()
+      for k in request.form.keys():
+        if k.startswith('item-'):
+          addrs.add(request.form.get(k))
+           
+      for i in request.form.get('to', '').split(','):
+        if i:
+          addrs.add(i)
+      
       msg = request.form.get('msg')
-      if addrs or invited_addrs:
-        if addrs:
-          addrs = addrs.split(',')
-        else:
-          addrs = []
-
-        # include invited email address (if any) as well
-        if invited_addrs:
-          invited_addrs = invited_addrs.split(',')
-          addrs = addrs + invited_addrs
-
+      if addrs:
         for addr in addrs:
           if addr.isdigit():
             email = api.get_user_info(addr).email
@@ -701,12 +705,34 @@ def authentication(action=None):
     
     email = request.form.get("email")
     password = request.form.get("password")
-    back_to = request.form.get('back_to', request.args.get('back_to'))
+
+    back_to = request.args.get('back_to', '')
     user_agent = request.environ.get('HTTP_USER_AGENT')
     app.logger.debug(user_agent)
     remote_addr = request.environ.get('REMOTE_ADDR')
-    session_id = api.sign_in(email, password, 
-                             user_agent=user_agent, remote_addr=remote_addr)
+
+    network = request.form.get("network")
+    
+    session_id = api.sign_in(email, password, user_agent=user_agent, remote_addr=remote_addr)
+
+    if session_id is None: # new user
+      # sign up instantly (!)
+      # api.sign_up(email=email, password=password, name="", user_agent=user_agent, remote_addr=remote_addr)
+
+      # then sign in again
+      # session_id = api.sign_in(email, password, user_agent=user_agent, remote_addr=remote_addr)
+      flash('Please check your email/password.')
+      return redirect(back_to)
+    elif session_id == False: # existing user, wrong password
+      flash('Wrong password, please try again :)')
+      return redirect(back_to)
+    elif session_id == -1:
+      flash('You used this email address with Facebook login. Please try it again')
+      return redirect(back_to)
+    elif session_id == -2:
+      flash('You used this email address with Google login. Please try it again')
+      return redirect(back_to)
+
     app.logger.debug(session_id)
     if session_id:
     
@@ -720,7 +746,6 @@ def authentication(action=None):
           if db != db_name:
             api.update_session_id(email, session_id, db)
 
-      
       session.permanent = True
       session['session_id'] = session_id
       if back_to:
@@ -729,6 +754,9 @@ def authentication(action=None):
       else:
         resp = redirect('/news_feed')  
         resp.set_cookie('channel_id', api.get_channel_id(session_id))
+
+      # set this so that home() knows which network user just signed up, same as in /oauth/google/authorized
+      resp.set_cookie('network', network)
       return resp
     else:
       if not email:
@@ -752,6 +780,10 @@ def authentication(action=None):
         
 
   elif request.path.endswith('sign_up'):
+    network = request.form.get("network")
+    back_to = request.args.get('back_to', '')
+    
+
     if request.method == 'GET':
       welcome = request.args.get('welcome')
       email = request.args.get('email')
@@ -769,11 +801,15 @@ def authentication(action=None):
     
     alerts = {}
     if email and api.is_exists(email):
-      alerts['email'] = '"%s" is already in use.' % email
+      # alerts['email'] = '"%s" is already in use.' % email
+      flash('Email is already in use')
+      return redirect(back_to)
     if len(password) < 6:
-      alerts['password'] = 'Your password must be at least 6 characters long.'
+      # alerts['password'] = 'Your password must be at least 6 characters long.'
+      flash('Your password must be at least 6 characters long.')
+      return redirect(back_to)
     
-    
+    # input error, redirect to login page
     if alerts.keys():
       resp = Response(render_template('sign_up.html', 
                                       alerts=alerts,
@@ -784,6 +820,7 @@ def authentication(action=None):
                                       PRIMARY_DOMAIN=settings.PRIMARY_DOMAIN,
                                       network_info=network_info))
       return resp
+    # input OK, process to sign up
     else:
       session_id = api.sign_up(email, password, name)
       if session_id:
@@ -801,12 +838,24 @@ def authentication(action=None):
         session['session_id'] = session_id
         
         user_id = api.get_user_id(session_id)
+        user_domain = network if network else email.split('@', 1)[-1]
+        
+        user_url = 'http://%s/%s' % (settings.PRIMARY_DOMAIN, user_domain)
+          
         if api.is_admin(user_id):
-          return redirect('/groups')
-        else:
-          return redirect('/everyone?getting_started=1')  
+          resp = redirect('/groups')
+        elif user_info.id:
+          user_url += '/news_feed'
+        else: # new user
+          user_url += '/everyone?getting_started=1&first_login=1'
+
+        # set this so that home() knows which network user just signed up, same as in /oauth/google/authorized
+        resp.set_cookie('network', network)
+
+        return resp
       else:
-        return redirect('/')
+        flash('Please check your email/password.')
+        return redirect(back_to)
       
   elif request.path.endswith('sign_out'):
     # token = session.get('oauth_google_token')
@@ -833,8 +882,7 @@ def authentication(action=None):
         for db in db_names:
           if db != db_name:
             api.sign_out(session_id, db_name=db)
-      
-    # print "DEBUG - in sign_out - token = " + str(token)
+
     # return redirect('https://accounts.google.com/o/oauth2/revoke?token=' + str(token) + '&continue=http://jupo.localhost.com')
 
     # clear user info in memcache
@@ -930,16 +978,18 @@ def google_login():
     email = request.args.get('email')
 
   domain = request.args.get('domain', settings.PRIMARY_DOMAIN)
+  network = request.args.get('network', '')
   
   # return redirect('https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/userinfo.email+https://www.googleapis.com/auth/userinfo.profile+https://www.google.com/m8/feeds/&redirect_uri=%s&approval_prompt_1=auto&state=%s&client_id=%s&hl=en&from_login=1&pli=1&login_hint=%s&user_id_1=%s&prompt=select_account' \
   #                % (settings.GOOGLE_REDIRECT_URI, domain, settings.GOOGLE_CLIENT_ID, email, email))
   return redirect('https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/userinfo.email+https://www.googleapis.com/auth/userinfo.profile+https://www.google.com/m8/feeds/&redirect_uri=%s&state=%s&client_id=%s&hl=en&from_login=1&pli=1&login_hint=%s&user_id_1=%s&prompt=select_account' \
-                  % (settings.GOOGLE_REDIRECT_URI, domain, settings.GOOGLE_CLIENT_ID, email, email))
+                  % (settings.GOOGLE_REDIRECT_URI, (domain + ";" + network), settings.GOOGLE_CLIENT_ID, email, email))
+  
 
 @app.route('/oauth/google/authorized')
 def google_authorized():
   code = request.args.get('code')
-  domain = request.args.get('state', settings.PRIMARY_DOMAIN)
+  domain, network = request.args.get('state').split(";")
   
   # get access_token
   url = 'https://accounts.google.com/o/oauth2/token'
@@ -966,15 +1016,20 @@ def google_authorized():
   if not user_email or '@' not in user_email:
     return redirect('/')
   
+  # with this, user network will be determined solely based on user email
   user_domain = user_email.split('@')[1]
+
+  # if network = '', user logged in from homepage --> determine network based on user email address
+  # if network != '', user logged in from sub-network page --> let authenticate user with that sub-network
+  if network:
+    user_domain = network
 
   url = 'https://www.google.com/m8/feeds/contacts/default/full/?max-results=1000'
   resp = requests.get(url, headers={'Authorization': '%s %s' \
                                     % (data.get('token_type'),
                                        data.get('access_token'))})
   
-  # get contact from Google Contacts, filter those that on the same domain (most likely your colleagues)
-  contacts = api.re.findall("address='([^']*?@" + user_domain + ")'", resp.text)
+  contacts = api.re.findall("address='(.*?)'", resp.text)
 
   if contacts:
     contacts = list(set(contacts))  
@@ -1004,15 +1059,20 @@ def google_authorized():
   
   api.update_session_id(user_email, session_id, db_name)
   session['session_id'] = session_id
+  session.permanent = True
+  
+  app.logger.debug(session.items())
 
   # create standard groups (e.g. for Customer Support, Sales) for this new network
   # print  str(api.new_group (session_id, "Sales", "Open", "Group for Sales teams"))
   
+   
+  user_url = 'http://%s/%s' % (settings.PRIMARY_DOMAIN, user_domain)
+    
   if user_info.id:
-    user_url = 'http://%s/%s/' % (settings.PRIMARY_DOMAIN, user_domain)
+    user_url += '/news_feed'
   else: # new user
-    user_url = 'http://%s/%s/everyone?getting_started=1&first_login=1' \
-             % (settings.PRIMARY_DOMAIN, user_domain)
+    user_url += '/everyone?getting_started=1&first_login=1'
     
   resp = redirect(user_url)  
   resp.set_cookie('network', user_domain)
@@ -1036,6 +1096,7 @@ if settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET:
   #  return facebook.authorize(callback='http://play.jupo.com/oauth/facebook/authorized')
     callback_url = url_for('facebook_authorized',
                            domain=request.args.get('domain', settings.PRIMARY_DOMAIN),
+                           network=request.args.get('network'),
                            _external=True)
     app.logger.debug(callback_url)
     return facebook.authorize(callback=callback_url)
@@ -1046,6 +1107,7 @@ if settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET:
   @facebook.authorized_handler
   def facebook_authorized(resp):
     domain = request.args.get('domain', settings.PRIMARY_DOMAIN)
+    network = request.args.get('network')
     
     if resp is None:
       return 'Access denied: reason=%s error=%s' % (request.args['error_reason'],
@@ -1076,7 +1138,8 @@ if settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET:
     facebook_id = me.data['id']
     friend_ids = [i['id'] for i in friends.data['data'] if isinstance(i, dict)]
   
-    db_name = domain.lower().strip().replace('.', '_')
+    # generate db_name based on full URL ( e.g. gmail.com.jupo.com)
+    db_name = (network + "." + domain).lower().strip().replace('.', '_')
     
     user_info = api.get_user_info(email=me.data.get('email'), db_name=db_name)
   
@@ -1084,7 +1147,7 @@ if settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET:
                                            name=me.data.get('name'), 
                                            gender=me.data.get('gender'), 
                                            avatar='https://graph.facebook.com/%s/picture' % facebook_id, 
-                                           link=me.data.get('link'), 
+                                           link=me.data.get('link'),
                                            locale=me.data.get('locale'), 
                                            timezone=me.data.get('timezone'), 
                                            verified=me.data.get('verified'), 
@@ -1103,16 +1166,19 @@ if settings.FACEBOOK_APP_ID and settings.FACEBOOK_APP_SECRET:
           if db != db_name:
             api.update_session_id(email, session_id, db)
           
-    if domain == settings.PRIMARY_DOMAIN:
-      session['session_id'] = session_id
-      if user_info.id:
-        return redirect('/')
-      else: # new user
-        return redirect('/everyone?getting_started=1')
-    else:
-      url = 'http://%s/?session_id=%s' % (domain, session_id)
-      resp = redirect(url)
-      return resp
+    # support subdir ( domain/network )
+    url = 'http://%s/%s/' % (domain, network)
+
+    session['session_id'] = session_id
+    session.permanent = True
+
+    # getting start for new user
+    if not user_info.id:
+      url = url + 'everyone?getting_started=1'
+
+    resp = redirect(url)
+    resp.delete_cookie('network')
+    return resp
   
   
   @facebook.tokengetter
@@ -1382,6 +1448,7 @@ def note(note_id=None, action=None, version=None):
                              mode='view',
                              full=True,
                              title=title, description=description, 
+                             settings=settings,
                              note=note)
     else:
       return render_homepage(session_id, note.title,
@@ -1495,33 +1562,33 @@ def user(user_id=None, page=1, view=None):
     return resp
     
   elif request.path.endswith('/update'):
-    old_password = request.form.get('current_password')
-    new_password = request.form.get('new_password')
-    confirm_new_password = request.form.get('confirm_new_password')
-    
-    if not new_password:
-      return redirect('/?message=New password must not be empty')
-      
-    
-    if old_password:
-      if new_password != confirm_new_password:
-        return redirect('/?message=New password does not match')
-      else:
-        ok = api.change_password(session_id, old_password, new_password)
-        
-        api.set_status(session_id, 'offline')
-        api.sign_out(session_id)
-        session.pop('session_id')
-        
-        return redirect('/?message=Password updated successfully.')
-    
-    if not old_password and new_password and new_password == confirm_new_password:
-      if owner.has_password():
-        return redirect('/?message=Please enter your current password.')
-      else:
-        user_id = api.get_user_id(session_id)
-        api.reset_password(user_id, new_password)
-        return redirect('/?message=New password updated successfully.')
+#     old_password = request.form.get('current_password')
+#     new_password = request.form.get('new_password')
+#     confirm_new_password = request.form.get('confirm_new_password')
+#     
+#     if not new_password:
+#       return redirect('/?message=New password must not be empty')
+#       
+#     
+#     if old_password:
+#       if new_password != confirm_new_password:
+#         return redirect('/?message=New password does not match')
+#       else:
+#         ok = api.change_password(session_id, old_password, new_password)
+#         
+#         api.set_status(session_id, 'offline')
+#         api.sign_out(session_id)
+#         session.pop('session_id')
+#         
+#         return redirect('/?message=Password updated successfully.')
+#     
+#     if not old_password and new_password and new_password == confirm_new_password:
+#       if owner.has_password():
+#         return redirect('/?message=Please enter your current password.')
+#       else:
+#         user_id = api.get_user_id(session_id)
+#         api.reset_password(user_id, new_password)
+#         return redirect('/?message=New password updated successfully.')
     
     
     name = request.form.get('name')
@@ -1670,33 +1737,18 @@ def contacts():
   call_from = request.args.get('from')
   
   if call_from and call_from == 'posting':
-    # filter Google contacts that already in contacts (meaning registered)
-    google_contacts_not_registered = []
+    tab = request.args.get('tab', 'contacts')
 
-    for c in owner.google_contacts_as_obj:
-      registered = 0
-
-      # loop through registered users to compare
-      for u in owner.contacts:
-        if u.email == c.email:
-          registered = 1
-
-      # add to google_contacts_not_registered
-      if registered == 0:
-        google_contacts_not_registered.append(c)
-    
-    # print "DEBUG - in contacts() - owner.contacts = " + str(owner.contacts[0].name) + " - " + str(owner.contacts[0].is_registered)
-    owner.google_contacts_as_obj = google_contacts_not_registered
-
-    # get groups
-    groups = api.get_groups(session_id)
-
+    if tab == 'google-contacts':
+      if owner.google_contacts:
+        owner.google_contacts = [api.get_user_info(email=email)
+                                 for email in owner.google_contacts]
     body = render_template('contacts_posting.html',
-                          groups=groups,
-                          owner=owner)
+                           tab=tab,
+                           owner=owner)
   else:
     body = render_template('contacts.html',
-                          owner=owner)
+                           owner=owner)
   
   return Response(dumps({'body': body,
                          'title': 'Contacts'}), 
@@ -1705,14 +1757,66 @@ def contacts():
 
 
 @app.route("/networks", methods=['OPTIONS'])
+@app.route('/network/<string:network_id>/update', methods=['POST'])
+@app.route("/network/<string:network_id>/<view>", methods=['OPTIONS', 'GET'])
 @login_required
-def networks():
+@line_profile
+def networks(network_id=None, view=None):
   session_id = session.get("session_id")
   user_id = api.get_user_id(session_id)
   if not user_id:
     abort(400)
     
   owner = api.get_user_info(user_id)
+
+
+  if view in ['config']:
+    if request.method == "OPTIONS":
+      if network_id != "0": # got network
+        network = api.get_network_by_id(network_id)
+      else:
+
+        # some old DB won't have info table (hence no network), init one with default value)
+        hostname = request.headers.get('Host', '').split(':')[0]
+
+        info = {'name': hostname.split('.')[0],
+                'domain'     : hostname,
+                'auth_google': True}
+
+        api.update_network_info(network_id, info)
+
+        network = api.get_network_by_hostname(hostname)
+
+      resp = {'title': 'Network Configuration',
+              'body': render_template('networks.html',
+                                      mode='edit',
+                                      view='config',
+                                      network=network,
+                                      owner=owner)}
+      return Response(dumps(resp), mimetype='application/json')
+    else:
+      abort(400)
+  elif request.path.endswith('/update'):
+    # network_id = request.form.get('network_id')
+    name = request.form.get('name')
+    description = request.form.get('description')
+
+    auth_normal = True if request.form.get('auth_normal') else False
+    auth_facebook = True if request.form.get('auth_facebook') else False
+
+    info = {'name': name,
+            'description': description,
+            'auth_normal': auth_normal,
+            'auth_google': True,
+            'auth_facebook': auth_facebook}
+
+    #fid = request.form.get('fid')
+    #if fid:
+    #  info['avatar'] = long(fid)
+
+    api.update_network_info(network_id, info)
+    return redirect('/news_feed')
+
   resp = {'body': render_template('networks.html', owner=owner),
           'title': 'Networks'}
   return Response(dumps(resp), mimetype='application/json')
@@ -2339,10 +2443,17 @@ def home():
   
   session_id = request.args.get('session_id')
   
-  
+  network = ""
+  network_exist = 1
+
   if hostname != settings.PRIMARY_DOMAIN:
+    # used to 404 if network doesn't exist. now we switch to customized landing page for them (even if network doesn't exist yet)
     if not api.is_exists(db_name=hostname.replace('.', '_')):
-      abort(404)    
+      network_exist = 0
+    network = hostname[:(len(hostname) - len(settings.PRIMARY_DOMAIN) - 1)]
+    if not api.is_domain_name(network):
+      network = hostname
+
     if session_id:
       session.permanent = True
       session['session_id'] = request.args.get('session_id')
@@ -2371,8 +2482,9 @@ def home():
              )
 
       # set the network here so that api.get_database_name() knows which network calls it
+      network = owner.email_domain
+      
       resp.set_cookie('network', owner.email_domain)
-
       return resp
 
 
@@ -2383,27 +2495,33 @@ def home():
     except KeyError:
       pass
     
-#     if hostname != settings.PRIMARY_DOMAIN:
-#       return redirect('/sign_in')
-    
     email = request.args.get('email')
     message = request.args.get('message')
+    network_info = api.get_network_by_hostname(hostname)
+
     resp = Response(render_template('landing_page.html',
                                     email=email,
+                                    settings=settings,
                                     domain=settings.PRIMARY_DOMAIN,
+                                    network=network,
+                                    network_info=network_info,
+                                    network_exist=network_exist,
                                     message=message))
     
-    back_to = request.args.get('back_to')
+    back_to = request.args.get('back_to', '')
     if back_to:
       resp.set_cookie('redirect_to', back_to)
     
     return resp
   else:
-    # session.pop("session_id") #clear session_id here since sub-domain can't clear session_id when logout
-    return redirect('http://%s/%s/news_feed' % (settings.PRIMARY_DOMAIN,
-                                                request.cookies.get('network')))
-  
-  
+    network = request.cookies.get('network')
+    if network:
+      return redirect('http://%s/%s/news_feed' % (settings.PRIMARY_DOMAIN,
+                                                  network))
+    else:
+      return redirect('http://%s/news_feed' % (settings.PRIMARY_DOMAIN))
+      
+      
 @app.route("/news_feed", methods=["GET", "OPTIONS"])
 @app.route("/news_feed/page<int:page>", methods=["GET", "OPTIONS"])
 @app.route('/archived', methods=['GET', 'OPTIONS'])
@@ -2411,7 +2529,7 @@ def home():
 @app.route("/news_feed/archive_from_here", methods=["POST"])
 #@login_required
 @line_profile
-def news_feed(page=1):  
+def news_feed(page=1):
   session_id = session.get("session_id")
     
   if request.path.endswith('archive_from_here'):
@@ -2419,10 +2537,14 @@ def news_feed(page=1):
     api.archive_posts(session_id, ts)
     return 'Done'
     
-    
+  app.logger.debug(api.get_database_name())
+  app.logger.debug(session_id)
   user_id = api.get_user_id(session_id)
   if not user_id:
-    return redirect('/sign_in')
+    resp = Response(render_template('landing_page.html',
+                                    settings=settings,
+                                    domain=settings.PRIMARY_DOMAIN))
+    return resp
   
   if user_id and request.cookies.get('redirect_to'):
     redirect_to = request.cookies.get('redirect_to')
@@ -2594,7 +2716,13 @@ def feed_actions(feed_id=None, action=None,
   user_id = api.get_user_id(session_id)
   if not user_id:
     if not request.path.startswith('/post/'):
-      return redirect('/')
+      # return redirect('/')
+      resp = redirect('http://' + settings.PRIMARY_DOMAIN)
+      hostname = request.headers.get('Host')
+      network = hostname[:-(len(settings.PRIMARY_DOMAIN)+1)]
+      url_redirect = 'http://%s/%s%s' % (settings.PRIMARY_DOMAIN, network, request.path)
+      resp.set_cookie('redirect_to', url_redirect)
+      return resp
     
   utcoffset = request.cookies.get('utcoffset')
   if utcoffset:
@@ -2868,11 +2996,14 @@ def feed_actions(feed_id=None, action=None,
             image = url.favicon
       if request.path.startswith('/post/') or not owner.id:
         return render_template('post.html',
-#                                background='dark-bg', 
+                               network=request.headers.get('Host')[:-(len(settings.PRIMARY_DOMAIN) + 1)],
                                owner=owner,
                                mode='view',
                                settings=settings,
-                               title=title, description=description, image=image, feed=feed)
+                               title=title, 
+                               description=description, 
+                               image=image, 
+                               feed=feed)
       else:
         return render_homepage(session_id, 
                                title=title, description=description, image=image,
@@ -3081,6 +3212,7 @@ def profile_pictures(attachment_id, size='60'):
     if size.isdigit():
       size = int(size)
       filedata = zoom(data, size, size)
+      # filedata = data
     else:
       width, height = size.split('_')
       filedata = zoom(data, int(width), int(height))
@@ -3356,16 +3488,16 @@ from werkzeug.wrappers import Request
 
 class NetworkNameDispatcher(object):
   """
-  Convert the first part of request PATH_INFO to hostname for backward 
+  Convert the first part of request PATH_INFO to hostname for backward
   compatibility
-  
-  Eg: 
-    
+
+  Eg:
+
      http://jupo.com/example.com/news_feed
-     
+
   -> http://example.com.jupo.com/news_feed
-  
-   
+
+
   """
   def __init__(self, app):
     self.app = app
@@ -3373,10 +3505,8 @@ class NetworkNameDispatcher(object):
   def __call__(self, environ, start_response):
     path = environ.get('PATH_INFO', '')
     items = path.lstrip('/').split('/', 1)
-      
-    if '.' in items[0]:  # is domain name
-      # print "DEBUG - in NetworkNameDispatcher - items = " + items[0]
-      
+
+    if '.' in items[0] and api.is_domain_name(items[0]):  # is domain name
       # save user network for later use
       # session['subnetwork'] = items[0]
 
@@ -3385,30 +3515,30 @@ class NetworkNameDispatcher(object):
         environ['PATH_INFO'] = '/%s' % items[1]
       else:
         environ['PATH_INFO'] = '/'
-      
+
       return self.app(environ, start_response)
-        
+
     else:
       request = Request(environ)
       network = request.cookies.get('network')
       if not network:
-        return self.app(environ, start_response) 
-      
+        return self.app(environ, start_response)
+
       if request.method == 'GET':
         url = 'http://%s/%s%s' % (settings.PRIMARY_DOMAIN,
                                   network, request.path)
         if request.query_string:
           url += '?' + request.query_string
-          
+
         response = redirect(url)
         return response(environ, start_response)
-      
+
       else:
         environ['HTTP_HOST'] = network + '.' + settings.PRIMARY_DOMAIN
         return self.app(environ, start_response)
-        
-      
-    
+
+
+
 
 app.wsgi_app = NetworkNameDispatcher(app.wsgi_app)
 
@@ -3418,14 +3548,14 @@ if __name__ == "__main__":
   
   @werkzeug.serving.run_with_reloader
   def run_app(debug=True):
-      
+
     from cherrypy import wsgiserver
-      
+
     app.debug = debug
-  
+
     # app.config['SERVER_NAME'] = settings.PRIMARY_DOMAIN
-    
-    app.config['DEBUG_TB_PROFILER_ENABLED'] = True
+
+    app.config['DEBUG_TB_PROFILER_ENABLED'] = False
     app.config['DEBUG_TB_TEMPLATE_EDITOR_ENABLED'] = True
     app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
     app.config['DEBUG_TB_PANELS'] = [
@@ -3443,11 +3573,10 @@ if __name__ == "__main__":
       'SHOW_STACKTRACES': True,
       'HIDE_FLASK_FROM_STACKTRACES': True
     }
-    
+
   #   toolbar = flask_debugtoolbar.DebugToolbarExtension(app)
-    
-  
-    
+
+
     server = wsgiserver.CherryPyWSGIServer(('0.0.0.0', 9000), app)
     try:
       print 'Serving HTTP on 0.0.0.0 port 9000...'
@@ -3455,11 +3584,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
       print '\nGoodbye.'
       server.stop()
-  
-  
+
+
   run_app(debug=True)
-
-
-
-
-
