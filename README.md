@@ -1,6 +1,5 @@
-
 ## The open-source Facebook Groups for team
-
+[![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/thomph/jupo/trend.png)](https://bitdeli.com/free "Bitdeli Badge")  
 Jupo is publicly hosted at <http://play.jupo.com/>
 and is also available for [download](https://github.com/juposocial/jupo/tags) 
 for private installation.
